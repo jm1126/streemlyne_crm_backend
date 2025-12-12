@@ -305,42 +305,6 @@ def refresh_token():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@auth_bp.route('/auth/me', methods=['GET'])
-@token_required
-def get_current_user():
-    """Get current user information"""
-    try:
-        return jsonify({
-            'user': request.current_user.to_dict()
-        }), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@auth_bp.route('/auth/refresh', methods=['POST'])
-@token_required
-def refresh_token():
-    """Refresh JWT token"""
-    try:
-        user = request.current_user
-        new_token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
-        
-        # Update session with new token
-        old_token = request.headers.get('Authorization').split(" ")[1]
-        session = Session.query.filter_by(session_token=old_token).first()
-        if session:
-            session.session_token = new_token
-            session.expires_at = datetime.utcnow() + timedelta(days=7)
-            db.session.commit()
-        
-        return jsonify({
-            'token': new_token,
-            'user': user.to_dict()
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
 @auth_bp.route('/auth/forgot-password', methods=['POST'])
 def forgot_password():
     """Request password reset"""
