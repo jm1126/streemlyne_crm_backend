@@ -1,7 +1,3 @@
-# models.py - Generic B2B CRM schema
-# Universal sales pipeline and customer relationship management
-# Suitable for any B2B business (SaaS, consulting, services, manufacturing, etc.)
-
 import json
 import uuid
 import secrets
@@ -708,36 +704,52 @@ class DataImport(db.Model):
 class Assignment(db.Model):
     __tablename__ = 'assignments'
 
+    # Primary key
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=True, index=True)
     
+    # Required fields
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id', ondelete='CASCADE'), nullable=False, index=True)
     type = db.Column(ASSIGNMENT_TYPE_ENUM, nullable=False, default='task')
     title = db.Column(db.String(255), nullable=False)
     date = db.Column(db.Date, nullable=False)
     
-    staff_id = db.Column(db.Integer, db.ForeignKey('team_members.id'), nullable=False)
+    # Date range fields (NEW - already in your database)
+    start_date = db.Column(db.Date, nullable=True)
+    end_date = db.Column(db.Date, nullable=True)
     
-    opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id', ondelete='CASCADE')) # MODIFIED: Added ondelete='CASCADE'
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id', ondelete='CASCADE')) # MODIFIED: Added ondelete='CASCADE'
+    # Staff assignment (staff_id is nullable, can use team_member text instead)
+    staff_id = db.Column(db.Integer, db.ForeignKey('team_members.id'), nullable=True)
+    team_member = db.Column(db.String(200), nullable=True)  # Text-based assignment
     
-    start_time = db.Column(db.Time)
-    end_time = db.Column(db.Time)
-    estimated_hours = db.Column(db.Float)
+    # Customer reference
+    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id', ondelete='CASCADE'), nullable=True)
+    customer_name = db.Column(db.String(200), nullable=True)  # Cached for faster display
     
-    notes = db.Column(db.Text)
+    # Opportunity/Job references
+    opportunity_id = db.Column(db.String(36), db.ForeignKey('opportunities.id', ondelete='CASCADE'), nullable=True)
+    job_id = db.Column(db.String(36), nullable=True)  # NEW field
+    job_type = db.Column(db.String(100), nullable=True)  # NEW field
+    
+    # Time tracking
+    start_time = db.Column(db.Time, nullable=True)
+    end_time = db.Column(db.Time, nullable=True)
+    estimated_hours = db.Column(db.Float, nullable=True)
+    
+    # Additional info
+    notes = db.Column(db.Text, nullable=True)
     priority = db.Column(db.String(20), default='Medium')
     status = db.Column(db.String(20), default='Scheduled')
     
-    created_by = db.Column(db.String(200))
+    # Audit fields
+    created_by = db.Column(db.String(200), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.String(200))
+    updated_by = db.Column(db.String(200), nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-        
-    # REPLACED by explicit backrefs in Customer and Opportunity models to prevent lazy loading issues.
-    staff = db.relationship('TeamMember', backref='assignments') 
+    
+    # Relationships
+    staff = db.relationship('TeamMember', backref='assignments')
     opportunity = db.relationship('Opportunity', backref='opportunity_assignments', viewonly=True)
     customer = db.relationship('Customer', backref='customer_assignments', viewonly=True)
-
     tenant = db.relationship('Tenant')
     
     def __repr__(self):
@@ -753,25 +765,62 @@ class Assignment(db.Model):
         return self.estimated_hours or 0
     
     def to_dict(self):
+        """Convert assignment to dictionary - handles all fields safely"""
+        # Get staff name safely
+        staff_name = None
+        try:
+            if self.staff and hasattr(self.staff, 'name'):
+                staff_name = self.staff.name
+            elif self.team_member:
+                staff_name = self.team_member
+        except Exception:
+            staff_name = self.team_member
+        
+        # Get customer name safely
+        customer_name = None
+        try:
+            if self.customer and hasattr(self.customer, 'name'):
+                customer_name = self.customer.name
+            elif self.customer_name:
+                customer_name = self.customer_name
+        except Exception:
+            customer_name = self.customer_name
+        
+        # Get opportunity reference safely
+        opportunity_reference = None
+        try:
+            if self.opportunity and hasattr(self.opportunity, 'opportunity_reference'):
+                opportunity_reference = self.opportunity.opportunity_reference
+        except Exception:
+            pass
+        
         return {
             'id': self.id,
             'type': self.type,
             'title': self.title,
             'date': self.date.isoformat() if self.date else None,
-            'staff_id': str(self.staff_id),
-            'opportunity_id': self.opportunity_id,
+            'start_date': self.start_date.isoformat() if self.start_date else None,
+            'end_date': self.end_date.isoformat() if self.end_date else None,
+            'staff_id': str(self.staff_id) if self.staff_id else None,
+            'team_member': staff_name,
+            'staff_name': staff_name,  # Alias for compatibility
             'customer_id': self.customer_id,
+            'customer_name': customer_name,
+            'opportunity_id': self.opportunity_id,
+            'opportunity_reference': opportunity_reference,
+            'job_id': self.job_id,
+            'job_type': self.job_type,
             'start_time': self.start_time.strftime('%H:%M') if self.start_time else None,
             'end_time': self.end_time.strftime('%H:%M') if self.end_time else None,
             'estimated_hours': self.estimated_hours,
             'notes': self.notes,
             'priority': self.priority,
             'status': self.status,
+            'created_by': self.created_by,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_by': self.updated_by,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            'staff_name': self.staff.name if self.staff else None,
-            'opportunity_reference': self.opportunity.opportunity_reference if self.opportunity else None,
-            'customer_name': self.customer.name if self.customer else None,
+            'tenant_id': self.tenant_id,
         }
     
 #--------------
@@ -857,9 +906,6 @@ class Job(db.Model):
             self.team_members_json = json.dumps(value or [])
         except Exception:
             self.team_members_json = "[]"
-
-
-# Add to models.py
 
 class Tenant(db.Model):
     __tablename__ = 'tenants'

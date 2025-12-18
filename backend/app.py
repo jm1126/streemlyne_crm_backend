@@ -66,13 +66,15 @@ def create_app():
     from routes.auth_routes import auth_bp
     from routes.form_routes import form_bp
     from routes.customer_routes import customer_bp
-    app.register_blueprint(customer_bp)
+    from routes.assignment_routes import assignment_bp
     
+    app.register_blueprint(customer_bp)
     app.register_blueprint(job_bp)
     app.register_blueprint(core_bp)
     app.register_blueprint(db_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(form_bp)
+    app.register_blueprint(assignment_bp)
     
     return app
 
