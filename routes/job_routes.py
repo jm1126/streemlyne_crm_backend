@@ -410,3 +410,4 @@ def update_pipeline_opportunity_stage(customer_id):
         db.session.rollback()
         print(f"❌ ERROR: Database commit failed: {str(e)}")
         return jsonify({"error": f"Failed to update stage: {str(e)}"}), 500
+        return jsonify({"error": f"Failed to update stage: {str(e)}"}), 500
