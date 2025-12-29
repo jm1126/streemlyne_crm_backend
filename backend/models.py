@@ -42,8 +42,8 @@ class User(db.Model):
     __tablename__ = 'users'
 
     id = db.Column(db.Integer, primary_key=True)
-    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)  # ADD THIS
-    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    email = db.Column(db.String(120), nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
 
     # Profile
@@ -52,7 +52,7 @@ class User(db.Model):
     phone = db.Column(db.String(20))
 
     # Role & permissions
-    role = db.Column(db.String(20), default='user')  # admin, manager, sales, user
+    role = db.Column(db.String(20), default='member')
     department = db.Column(db.String(50))
 
     # Account status
@@ -71,7 +71,17 @@ class User(db.Model):
     # Email verification
     verification_token = db.Column(db.String(100))
 
-    tenant = db.relationship('Tenant', back_populates='users')
+    # ✅ FIX: Explicitly specify foreign_keys in relationship
+    tenant = db.relationship(
+        'Tenant',
+        back_populates='users',
+        foreign_keys=[tenant_id]  # Use this foreign key, not owner_user_id
+    )
+
+    # Unique constraint on email + tenant_id combination
+    __table_args__ = (
+        db.UniqueConstraint('email', 'tenant_id', name='uq_user_email_tenant'),
+    )
 
     def __repr__(self):
         return f'<User {self.email}>'
@@ -99,6 +109,7 @@ class User(db.Model):
             'user_id': self.id,
             'email': self.email,
             'role': self.role,
+            'tenant_id': self.tenant_id,
             'exp': datetime.utcnow() + timedelta(days=7),
             'iat': datetime.utcnow(),
         }
@@ -130,6 +141,8 @@ class User(db.Model):
             'is_verified': self.is_verified,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'last_login': self.last_login.isoformat() if self.last_login else None,
+            'tenant_type': self.tenant.tenant_type if self.tenant else None,
+            'company_name': self.tenant.company_name if self.tenant and self.tenant.tenant_type == 'company' else None,
         }
 
 
@@ -912,52 +925,186 @@ class Tenant(db.Model):
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     
-    # Company identification
-    company_name = db.Column(db.String(255), nullable=False, unique=True)
-    subdomain = db.Column(db.String(100), unique=True, nullable=False)  # aztec, client2
-    custom_domain = db.Column(db.String(255), unique=True)  # optional: aztec.com
+    # Tenant type - 'individual' or 'company'
+    tenant_type = db.Column(db.String(20), nullable=False, default='company')
     
-    # Contact info
+    # Company identification (nullable for individuals)
+    company_name = db.Column(db.String(255), unique=True, nullable=True)
+    subdomain = db.Column(db.String(100), unique=True, nullable=True)
+    custom_domain = db.Column(db.String(255), unique=True)
+    
+    # For individual tenants - link to owner user
+    # ✅ FIX: Specify foreign_keys explicitly
+    owner_user_id = db.Column(db.Integer, nullable=True)  # Don't add ForeignKey here yet
+    
+    # ... rest of fields ...
     contact_email = db.Column(db.String(255))
     contact_phone = db.Column(db.String(50))
-    
-    # Subscription & Features
-    subscription_tier = db.Column(db.String(50), default='basic')  # basic, professional, enterprise
-    features = db.Column(db.JSON)  # Feature flags
-    settings = db.Column(db.JSON)  # Tenant-specific settings
-    
-    # Branding
+    subscription_tier = db.Column(db.String(50), default='basic')
+    features = db.Column(db.JSON)
+    settings = db.Column(db.JSON)
     logo_url = db.Column(db.String(500))
-    primary_color = db.Column(db.String(7))  # hex color
-    
-    # Status
+    primary_color = db.Column(db.String(7))
     is_active = db.Column(db.Boolean, default=True)
     is_trial = db.Column(db.Boolean, default=False)
     trial_ends_at = db.Column(db.DateTime)
-    
-    # Audit
+    max_users = db.Column(db.Integer, default=999999)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships
-    users = db.relationship('User', back_populates='tenant', lazy=True)
+    # ✅ FIX: Explicitly specify foreign_keys in relationship
+    users = db.relationship(
+        'User',
+        back_populates='tenant',
+        foreign_keys='User.tenant_id',  # Specify which foreign key to use
+        lazy=True
+    )
     customers = db.relationship('Customer', back_populates='tenant', lazy=True)
     
     def __repr__(self):
-        return f'<Tenant {self.company_name} ({self.subdomain})>'
+        if self.tenant_type == 'company':
+            return f'<Tenant Company: {self.company_name}>'
+        else:
+            return f'<Tenant Individual: {self.id}>'
     
     def has_feature(self, feature_name: str) -> bool:
-        """Check if tenant has access to a feature"""
         if not self.features:
             return False
         return self.features.get(feature_name, False)
     
+    @staticmethod
+    def create_slug(company_name):
+        import re
+        slug = company_name.lower()
+        slug = re.sub(r'[^a-z0-9]+', '-', slug)
+        slug = slug.strip('-')
+        return slug
+    
     def to_dict(self):
         return {
             'id': self.id,
+            'tenant_type': self.tenant_type,
             'company_name': self.company_name,
             'subdomain': self.subdomain,
             'subscription_tier': self.subscription_tier,
             'is_active': self.is_active,
+            'max_users': self.max_users,
             'features': self.features or {}
+        }
+
+class ChatConversation(db.Model):
+    """Chat conversations - isolated per tenant and user"""
+    __tablename__ = 'chat_conversations'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    
+    # Conversation metadata
+    title = db.Column(db.String(255), default='New Conversation')
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    messages = db.relationship('ChatMessage', back_populates='conversation', lazy=True, cascade='all, delete-orphan')
+    user = db.relationship('User', backref='chat_conversations')
+    tenant = db.relationship('Tenant')
+    
+    def __repr__(self):
+        return f'<ChatConversation {self.id}: {self.title}>'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'tenant_id': self.tenant_id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'message_count': len(self.messages) if self.messages else 0
+        }
+
+
+class ChatMessage(db.Model):
+    """Individual messages within a conversation - isolated per tenant and user"""
+    __tablename__ = 'chat_messages'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    conversation_id = db.Column(db.String(36), db.ForeignKey('chat_conversations.id'), nullable=False, index=True)
+    
+    # Message content
+    role = db.Column(db.String(20), nullable=False)  # 'user' or 'assistant'
+    content = db.Column(db.Text, nullable=False)
+    
+    # Optional: Store function calls and tool usage
+    function_calls = db.Column(db.JSON)  # Store tool calls made by assistant
+    tool_results = db.Column(db.JSON)    # Store results from tools
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    conversation = db.relationship('ChatConversation', back_populates='messages')
+    user = db.relationship('User', backref='chat_messages')
+    tenant = db.relationship('Tenant')
+    
+    def __repr__(self):
+        return f'<ChatMessage {self.id}: {self.role}>'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'conversation_id': self.conversation_id,
+            'role': self.role,
+            'content': self.content,
+            'function_calls': self.function_calls,
+            'tool_results': self.tool_results,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ALTERNATIVE: Simpler structure if you just want to store chat history as JSON blobs
+
+class ChatHistory(db.Model):
+    """Simple chat history storage - isolated per tenant and user"""
+    __tablename__ = 'chat_history'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = db.Column(db.String(36), db.ForeignKey('tenants.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    
+    # Store entire chat as JSON
+    session_id = db.Column(db.String(100), nullable=False, index=True)  # Unique session identifier
+    messages = db.Column(db.JSON, nullable=False)  # Array of {role, content, timestamp}
+    
+    # Metadata
+    title = db.Column(db.String(255))
+    context = db.Column(db.JSON)  # Store any context like customer_id, job_id, etc.
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = db.relationship('User', backref='chat_histories')
+    tenant = db.relationship('Tenant')
+    
+    def __repr__(self):
+        return f'<ChatHistory {self.id} - Session: {self.session_id}>'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'session_id': self.session_id,
+            'tenant_id': self.tenant_id,
+            'user_id': self.user_id,
+            'title': self.title,
+            'messages': self.messages,
+            'context': self.context,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

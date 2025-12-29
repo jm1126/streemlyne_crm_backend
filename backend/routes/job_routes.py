@@ -1,10 +1,10 @@
 # routes/job_routes.py
 from flask import Blueprint, request, jsonify
 from database import db
-from models import Job, Customer, generate_job_reference
+from models import Job, Customer, Opportunity, generate_job_reference
 from datetime import datetime, date
+from sqlalchemy import func
 import json
-import pytz
 
 job_bp = Blueprint("jobs", __name__)
 
@@ -49,84 +49,44 @@ def create_job():
     if not customer:
         return jsonify({"error": "Invalid customer_id"}), 400
 
-    # -----------------------------
-    # DATE HANDLING
-    # -----------------------------
+    due_date = parse_iso_date_safe(data.get("due_date"))
+    start_date = parse_iso_date_safe(data.get("start_date"))
+    completion_date = parse_iso_date_safe(data.get("completion_date"))
 
-    # 1️⃣ DUE DATE - only if user explicitly sent it
-    due_date = None
-    if "due_date" in data and data.get("due_date"):
-        due_date = parse_iso_date_safe(data.get("due_date"))
+    job = Job()
 
-    # 2️⃣ COMPLETION
-    completion_date = parse_iso_date_safe(data.get("completion_date")) if data.get("completion_date") else None
-    deposit_due_date = parse_iso_date_safe(data.get("deposit_due_date")) if data.get("deposit_due_date") else None
+    job.job_reference = data.get("job_reference") or generate_job_reference()
+    job.title = data.get("title") or data.get("job_name") or "New Job"
+    job.job_type = data.get("job_type") or "General"
+    job.stage = data.get("stage") or "Prospect"
+    job.priority = data.get("priority") or "Medium"
+    job.customer_id = customer_id
 
-    # 3️⃣ START DATE (client timezone aware)
-    start_date = None
+    job.due_date = due_date
+    job.start_date = start_date
+    job.completion_date = completion_date
 
-    # If user provided explicit start date → respect it
-    if "start_date" in data and data.get("start_date"):
-        parsed = parse_iso_date_safe(data.get("start_date"))
-        if parsed:
-            start_date = parsed
+    job.estimated_value = data.get("estimated_value")
+    job.agreed_value = data.get("agreed_value")
+    job.deposit_amount = data.get("deposit_amount")
+    job.deposit_due_date = parse_iso_date_safe(data.get("deposit_due_date"))
 
-    # If user didn't give start_date → use client_today
-    if not start_date:
-        client_today = data.get("client_today")  # 👈 passed from frontend
-        if client_today:
-            parsed_client = parse_iso_date_safe(client_today)
-            if parsed_client:
-                start_date = parsed_client
+    job.location = data.get("location")
+    job.primary_contact = data.get("primary_contact")
+    job.account_manager = data.get("account_manager")
+    job.notes = data.get("notes")
+    job.tags = data.get("tags")
+    job.description = data.get("description")
+    job.requirements = data.get("requirements")
+    
 
-    # Final fallback — server timezone (rarely used)
-    if not start_date:
-        start_date = datetime.now().date()
-
-
-    # ----------------------------------------------------
-    # FINANCIALS
-    # ----------------------------------------------------
-    estimated_value = data.get("estimated_value") if "estimated_value" in data else None
-    agreed_value = data.get("agreed_value") if "agreed_value" in data else None
-    deposit_amount = data.get("deposit_amount") if "deposit_amount" in data else None
-
-    # ----------------------------------------------------
-    # CREATE JOB
-    # ----------------------------------------------------
-    job = Job(
-        job_reference=data.get("job_reference") or generate_job_reference(),
-        title=data.get("title") or data.get("job_name") or "New Job",
-        job_type=data.get("job_type") or "General",
-        stage=data.get("stage") or "Prospect",
-        priority=data.get("priority") or "Medium",
-        customer_id=customer_id,
-
-        start_date=start_date,
-        due_date=due_date,
-        completion_date=completion_date,
-        deposit_due_date=deposit_due_date,
-
-        estimated_value=estimated_value,
-        agreed_value=agreed_value,
-        deposit_amount=deposit_amount,
-
-        location=data.get("location"),
-        primary_contact=data.get("primary_contact"),
-        notes=data.get("notes"),
-        tags=data.get("tags"),
-        description=data.get("description"),
-        requirements=data.get("requirements")
-    )
-
-    # ----------------------------------------------------
-    # TEAM MEMBERS
-    # ----------------------------------------------------
+    # accept team_members either as list or comma-separated string
     team_members = data.get("team_members") or data.get("team_member")
     if team_members:
         if isinstance(team_members, str):
-            members = [p.strip() for p in team_members.replace(" and ", ",").split(",") if p.strip()]
-            job.team_members = members
+            # split by comma or " and "
+            parts = [p.strip() for p in (team_members.replace(" and ", ",").split(",")) if p.strip()]
+            job.team_members = parts
         elif isinstance(team_members, list):
             job.team_members = team_members
 
@@ -140,8 +100,6 @@ def create_job():
         "stage": job.stage,
         "priority": job.priority,
         "customer_id": job.customer_id,
-        "customer_name": customer.name,
-        "start_date": job.start_date.isoformat() if job.start_date else None,
         "due_date": job.due_date.isoformat() if job.due_date else None,
         "team_members": job.team_members,
         "message": "Job created successfully"
@@ -176,7 +134,7 @@ def get_single_job(job_id):
         "deposit_due_date": job.deposit_due_date.isoformat() if job.deposit_due_date else None,
         "location": job.location,
         "primary_contact": job.primary_contact,
-      #  "account_manager": job.account_manager,
+        "account_manager": job.account_manager,
         "team_members": job.team_members,
         "notes": job.notes,
         "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -188,65 +146,60 @@ def get_single_job(job_id):
 # ----------------------------
 # Get All Jobs (with filtering)
 # ----------------------------
+
 @job_bp.route("/jobs", methods=["GET"])
 def get_jobs():
-    ref = request.args.get("ref")
-    customer_id = request.args.get("customer_id")
+    from sqlalchemy.orm import Query
+    
+    ref = request.args.get("ref", type=str)
+    customer_id = request.args.get("customer_id", type=str)
+    stage = request.args.get("stage", type=str)
+    priority = request.args.get("priority", type=str)
+    account_manager = request.args.get("account_manager", type=str)
+    team_member = request.args.get("team_member", type=str)
+    team = request.args.get("team", type=str)
+    from_date = request.args.get("from_date", type=str)
+    to_date = request.args.get("to_date", type=str)
 
-    stage = request.args.get("stage")
-    priority = request.args.get("priority")
-    team_member = request.args.get("team_member")
+    query = Job.query  # type: Query
 
-    # NEW: flexible date filters - FIXED to handle due_date parameter
-    due_date = parse_iso_date_safe(request.args.get("due_date"))  # ADDED THIS
-    from_date = parse_iso_date_safe(request.args.get("from_date"))
-    to_date = parse_iso_date_safe(request.args.get("to_date"))
-
-    query = Job.query
-
-    # -----------------------
-    # BASIC FILTERS
-    # -----------------------
+    # Basic filters
     if ref:
         query = query.filter(Job.job_reference == ref)
-
     if customer_id:
         query = query.filter(Job.customer_id == customer_id)
 
+    # Stage / priority (case-insensitive)
     if stage:
         query = query.filter(Job.stage.ilike(f"%{stage}%"))
-
     if priority:
         query = query.filter(Job.priority.ilike(f"%{priority}%"))
 
+    # account manager
+    if account_manager:
+        query = query.filter(Job.account_manager.ilike(f"%{account_manager}%"))
+
+    # team filter (search inside team_members_json)
+    if team:
+        query = query.filter(Job.team_members_json.ilike(f"%{team}%"))
+
+    # team_member filter (same backing column)
     if team_member:
         query = query.filter(Job.team_members_json.ilike(f"%{team_member}%"))
 
-    # -----------------------
-    # DATE FILTERS 
-    # -----------------------
 
-    # EXACT DUE DATE (highest priority)
-    if due_date:
-        query = query.filter(Job.due_date == due_date)
-
-    # BOTH dates provided → check if exact-date case
-    elif from_date and to_date:
-        # EXACT DATE (same date)
-        if from_date == to_date:
-            query = query.filter(Job.due_date == from_date)
-        # RANGE between two different dates
-        else:
-            query = query.filter(Job.due_date >= from_date)
-            query = query.filter(Job.due_date <= to_date)
-
-    # ONLY from_date → AFTER or ON this date
-    elif from_date:
-        query = query.filter(Job.due_date >= from_date)
-
-    # ONLY to_date → BEFORE or ON this date
-    elif to_date:
-        query = query.filter(Job.due_date <= to_date)
+    # date filters - parse as ISO-like YYYY-MM-DD; safe fallback to ignore invalid dates
+    try:
+        if from_date:
+            fd = parse_iso_date_safe(from_date)
+            if fd:
+                query = query.filter(Job.due_date >= fd) 
+        if to_date:
+            td = parse_iso_date_safe(to_date)
+            if td:
+                query = query.filter(Job.due_date <= td)
+    except Exception:
+        pass
 
     jobs = query.order_by(Job.created_at.desc()).all()
 
@@ -261,22 +214,20 @@ def get_jobs():
             "customer_id": j.customer_id,
             "customer_name": j.customer.name if j.customer else None,
             "due_date": j.due_date.isoformat() if j.due_date else None,
-            "start_date": j.start_date.isoformat() if j.start_date else None,
-            "completion_date": j.completion_date.isoformat() if j.completion_date else None,
             "estimated_value": float(j.estimated_value) if j.estimated_value else None,
             "agreed_value": float(j.agreed_value) if j.agreed_value else None,
             "deposit_amount": float(j.deposit_amount) if j.deposit_amount else None,
-            "team_members": j.team_members,
             "location": j.location,
+            # "account_manager": j.account_manager,
+            "team_members": j.team_members,   # <-- use property (list)
+            "team": getattr(j, "team", None),
             "primary_contact": j.primary_contact,
             "notes": j.notes,
             "created_at": j.created_at.isoformat() if j.created_at else None,
             "updated_at": j.updated_at.isoformat() if j.updated_at else None
         }
 
-    return jsonify([job_to_json(j) for j in jobs])
-
-
+    return jsonify([job_to_json(j) for j in jobs]), 200
 
 
 # ----------------------------
@@ -286,8 +237,6 @@ def get_jobs():
 def update_job(job_id):
     job = Job.query.get_or_404(job_id)
     data = request.json or {}
-
-    print(f"[DEBUG] Updating job {job_id} with data: {data}")  # Debug logging
 
     # simple fields
     if "title" in data: job.title = data.get("title")
@@ -299,101 +248,46 @@ def update_job(job_id):
     if "agreed_value" in data: job.agreed_value = data.get("agreed_value")
     if "deposit_amount" in data: job.deposit_amount = data.get("deposit_amount")
     if "location" in data: job.location = data.get("location")
+    if "account_manager" in data: job.account_manager = data.get("account_manager")
     if "primary_contact" in data: job.primary_contact = data.get("primary_contact")
     if "notes" in data: job.notes = data.get("notes")
     if "tags" in data: job.tags = data.get("tags")
     if "description" in data: job.description = data.get("description")
     if "requirements" in data: job.requirements = data.get("requirements")
 
-    # team_members — MERGE (append new members, keep existing)
+    # team_members
     if "team_members" in data or "team_member" in data:
         raw = data.get("team_members") or data.get("team_member")
-
-        # Normalize incoming to a list of clean names
-        incoming = []
         if isinstance(raw, str):
-            incoming = [p.strip() for p in raw.replace(" and ", ",").split(",") if p.strip()]
+            # support comma and "and"
+            parts = [
+                p.strip() for p in raw.replace(" and ", ",").split(",")
+                if p.strip()
+            ]
+            job.team_members = parts
         elif isinstance(raw, list):
-            # accept list directly
-            incoming = [str(p).strip() for p in raw if str(p).strip()]
+            job.team_members = raw
 
-        # Ensure we have at least something
-        if incoming:
-            # Get current members (ensure it's a list)
-            current = job.team_members or []
-            # Merge preserving order: keep current first, then append new unique ones
-            merged = list(current)  # shallow copy
-            for name in incoming:
-                # compare case-insensitively but keep original casing from incoming/current
-                if not any(n.lower() == name.lower() for n in merged):
-                    merged.append(name)
-
-            job.team_members = merged
-
-
-    # ✅ CRITICAL FIX: Handle all date fields properly
-    # START DATE - explicitly check for it
-    if "start_date" in data:
-        parsed = parse_iso_date_safe(data.get("start_date"))
-        if parsed:
-            job.start_date = parsed
-            print(f"[DEBUG] Start date updated to: {parsed}")
-        else:
-            print(f"[WARNING] Failed to parse start_date: {data.get('start_date')}")
-
-    # DUE DATE
+    # dates (safe)
     if "due_date" in data:
         parsed = parse_iso_date_safe(data.get("due_date"))
-        if parsed:
-            job.due_date = parsed
-            print(f"[DEBUG] Due date updated to: {parsed}")
+        if parsed: job.due_date = parsed
 
-    # COMPLETION DATE
+    if "start_date" in data:
+        parsed = parse_iso_date_safe(data.get("start_date"))
+        if parsed: job.start_date = parsed
+
     if "completion_date" in data:
         parsed = parse_iso_date_safe(data.get("completion_date"))
-        if parsed:
-            job.completion_date = parsed
-            print(f"[DEBUG] Completion date updated to: {parsed}")
+        if parsed: job.completion_date = parsed
 
-    # DEPOSIT DUE DATE
     if "deposit_due_date" in data:
         parsed = parse_iso_date_safe(data.get("deposit_due_date"))
-        if parsed:
-            job.deposit_due_date = parsed
-            print(f"[DEBUG] Deposit due date updated to: {parsed}")
+        if parsed: job.deposit_due_date = parsed
 
-    # Commit changes
-    try:
-        db.session.commit()
-        print(f"[DEBUG] Job {job_id} updated successfully")
-    except Exception as e:
-        db.session.rollback()
-        print(f"[ERROR] Failed to commit: {e}")
-        return jsonify({"error": str(e)}), 500
+    db.session.commit()
 
-    return jsonify({
-        "id": job.id,
-        "job_reference": job.job_reference,
-        "title": job.title,
-        "stage": job.stage,
-        "priority": job.priority,
-        "job_type": job.job_type,
-        "customer_id": job.customer_id,
-        "customer_name": job.customer.name if job.customer else None,
-        "start_date": job.start_date.isoformat() if job.start_date else None,
-        "due_date": job.due_date.isoformat() if job.due_date else None,
-        "completion_date": job.completion_date.isoformat() if job.completion_date else None,
-        "estimated_value": float(job.estimated_value) if job.estimated_value else None,
-        "agreed_value": float(job.agreed_value) if job.agreed_value else None,
-        "deposit_amount": float(job.deposit_amount) if job.deposit_amount else None,
-        "deposit_due_date": job.deposit_due_date.isoformat() if job.deposit_due_date else None,
-        "location": job.location,
-        "primary_contact": job.primary_contact,
-        "team_members": job.team_members,
-        "notes": job.notes,
-        "created_at": job.created_at.isoformat() if job.created_at else None,
-        "updated_at": job.updated_at.isoformat() if job.updated_at else None
-    }), 200
+    return jsonify({"message": "Job updated successfully"}), 200
 
 
 # ----------------------------
@@ -405,3 +299,114 @@ def delete_job(job_id):
     db.session.delete(job)
     db.session.commit()
     return jsonify({"message": "Job deleted successfully"}), 200
+
+@job_bp.route('/jobs/pipeline-opportunities', methods=['GET'])
+def get_pipeline_opportunities():
+    """
+    Fetch customers in "Closed Won" stage for Jobs Pipeline view.
+    Distributed across job workflow stages.
+    """
+    print("🔍 DEBUG: /jobs/pipeline-opportunities endpoint called")
+    
+    CLOSED_WON_STAGE = "Closed Won"
+    
+    # Query CUSTOMERS in "Closed Won" stage only
+    customers = Customer.query.filter(
+        Customer.stage == CLOSED_WON_STAGE
+    ).order_by(Customer.updated_at.desc()).all()
+    
+    print(f"🔍 DEBUG: Found {len(customers)} customers in 'Closed Won' stage")
+    
+    # Build response with job_workflow_stage
+    pipeline_items = []
+    for customer in customers:
+        # Use correct column name: jobworkflowstage
+        job_workflow_stage = getattr(customer, 'job_workflow_stage', None) or "New"
+        
+        item = {
+            "id": customer.id,
+            "opportunity_name": customer.name,
+            "opportunity_reference": f"CUST-{str(customer.id)[:4].upper()}",
+            "stage": customer.stage,
+            "job_workflow_stage": job_workflow_stage,
+            "priority": getattr(customer, 'priority', 'Medium') or "Medium",
+            "estimated_value": float(customer.estimatedvalue) if hasattr(customer, 'estimatedvalue') and customer.estimatedvalue else None,
+            "probability": getattr(customer, 'probability', None),
+            "expected_close_date": None,
+            "actual_close_date": customer.updated_at.isoformat() if customer.updated_at else None,
+            "salesperson_name": customer.salesperson,
+            "notes": getattr(customer, 'notes', None),
+            "created_at": customer.created_at.isoformat() if customer.created_at else None,
+            "updated_at": customer.updated_at.isoformat() if customer.updated_at else None,
+            "customer": {
+                "id": customer.id,
+                "name": customer.name,
+                "company_name": customer.company_name,  # FIX: Use company_name with underscore
+                "email": customer.email,
+                "phone": customer.phone,
+                "address": customer.address,
+                "stage": customer.stage,
+                "salesperson": customer.salesperson,
+            }
+        }
+        pipeline_items.append(item)
+        print(f"  → {customer.name} | Sales: {customer.stage}, Job: {job_workflow_stage}")
+    
+    print(f"🔍 DEBUG: Returning {len(pipeline_items)} items")
+    return jsonify(pipeline_items), 200
+
+# Update job workflow stage
+# Update job workflow stage - MODIFIED TO BROADCAST SSE
+@job_bp.route('/jobs/pipeline-opportunities/<string:customer_id>/stage', methods=['PUT'])
+def update_pipeline_opportunity_stage(customer_id):
+    """Update the job_workflow_stage for a customer in the Jobs Pipeline."""
+    print(f"🔧 DEBUG: Update stage called for customer {customer_id}")
+    
+    customer = Customer.query.get(customer_id)
+    if not customer:
+        print(f"❌ ERROR: Customer {customer_id} not found")
+        return jsonify({"error": "Customer not found"}), 404
+    
+    data = request.json or {}
+    print(f"📥 DEBUG: Received data: {data}")
+    
+    # Accept both formats: job_workflow_stage and jobworkflowstage
+    new_stage = data.get('job_workflow_stage') or data.get('jobworkflowstage')
+    
+    if not new_stage:
+        print("❌ ERROR: No stage provided in request")
+        return jsonify({"error": "job_workflow_stage is required"}), 400
+    
+    # Validate stage
+    valid_stages = ["New", "Assigned", "In Progress", "On Hold Waiting", "Review", "Completed"]
+    if new_stage not in valid_stages:
+        print(f"❌ ERROR: Invalid stage '{new_stage}'")
+        return jsonify({"error": f"Invalid job_workflow_stage. Must be one of {valid_stages}"}), 400
+    
+    old_stage = customer.job_workflow_stage
+    customer.job_workflow_stage = new_stage
+    
+    try:
+        db.session.commit()
+        print(f"✅ SUCCESS: Updated customer {customer.name} from '{old_stage}' to '{new_stage}'")
+        
+        # 🚀 NEW: Broadcast SSE event for real-time update
+        from app import broadcast_sse_event
+        broadcast_sse_event("workflow_stage_updated", {
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+            "old_stage": old_stage,
+            "new_stage": new_stage,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
+        return jsonify({
+            "message": "Job workflow stage updated successfully",
+            "customer_id": customer.id,
+            "job_workflow_stage": customer.job_workflow_stage,
+            "old_stage": old_stage
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ ERROR: Database commit failed: {str(e)}")
+        return jsonify({"error": f"Failed to update stage: {str(e)}"}), 500

@@ -21,8 +21,22 @@ def create_app():
     # Fetches from .env or uses fallback
     app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'default-fallback-secret-key')
     
-    # Configure CORS
-    CORS(app, origins="*")
+    # ✅ FIXED: Configure CORS properly with explicit settings
+    CORS(app, resources={
+        r"/*": {
+            "origins": [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:3001",
+                "http://127.0.0.1:3001"
+            ],
+            "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+            "supports_credentials": True,
+            "expose_headers": ["Content-Type", "Authorization"],
+            "max_age": 3600
+        }
+    })
     
     # Database configuration: SWITCHING TO SUPABASE POSTGRESQL
     # -----------------------------------------------------------
@@ -67,6 +81,8 @@ def create_app():
     from routes.form_routes import form_bp
     from routes.customer_routes import customer_bp
     from routes.assignment_routes import assignment_bp
+    from routes.chat_routes import chat_bp
+
     
     app.register_blueprint(customer_bp)
     app.register_blueprint(job_bp)
@@ -75,6 +91,11 @@ def create_app():
     app.register_blueprint(auth_bp)
     app.register_blueprint(form_bp)
     app.register_blueprint(assignment_bp)
+    app.register_blueprint(chat_bp)
+    
+    # ✅ ADDED: Print CORS configuration on startup for debugging
+    print("✅ CORS enabled for origins: http://localhost:3000, http://127.0.0.1:3000")
+    print("✅ CORS methods allowed: GET, POST, PUT, PATCH, DELETE, OPTIONS")
     
     return app
 
@@ -87,4 +108,5 @@ if __name__ == '__main__':
         # Then, use 'flask db migrate' and 'flask db upgrade'.
         # db.create_all() 
         print("Starting Flask application...")
-    app.run(debug=True)
+        print("Backend running on: http://localhost:5000")
+    app.run(debug=True, host='0.0.0.0', port=5000)

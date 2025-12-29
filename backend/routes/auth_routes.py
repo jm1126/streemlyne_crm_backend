@@ -100,12 +100,24 @@ def admin_required(f):
 
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
-    """Register a new user"""
+    """
+    Register a new user with either Individual or Company tenant
+    
+    Request Body:
+    {
+        "email": "user@example.com",
+        "password": "password123",
+        "first_name": "John",
+        "last_name": "Doe",
+        "tenant_type": "individual" OR "company",
+        "company_name": "Acme Corp" (only if tenant_type is "company")
+    }
+    """
     try:
         data = request.get_json()
         
-        # Validate required fields
-        required_fields = ['email', 'password', 'first_name', 'last_name', 'tenant_id']  # ADD tenant_id
+        # ✅ CRITICAL: Check for tenant_type, NOT tenant_id
+        required_fields = ['email', 'password', 'first_name', 'last_name', 'tenant_type']
         for field in required_fields:
             if not data.get(field):
                 return jsonify({'error': f'{field} is required'}), 400
@@ -114,7 +126,13 @@ def register():
         password = data['password']
         first_name = data['first_name'].strip()
         last_name = data['last_name'].strip()
-        tenant_id = data['tenant_id']  # NEW
+        tenant_type = data['tenant_type'].lower()
+        
+        print(f"📝 Registration request - Email: {email}, Type: {tenant_type}")
+        
+        # Validate tenant type
+        if tenant_type not in ['individual', 'company']:
+            return jsonify({'error': 'tenant_type must be either "individual" or "company"'}), 400
         
         # Validate email format
         if not validate_email(email):
@@ -125,45 +143,132 @@ def register():
         if not is_valid:
             return jsonify({'error': message}), 400
         
-        # NEW: Verify tenant exists and is active
-        tenant = Tenant.query.get(tenant_id)
-        if not tenant:
-            return jsonify({'error': 'Invalid tenant'}), 400
-        if not tenant.is_active:
-            return jsonify({'error': 'Tenant account is inactive'}), 403
+        # Handle Company Registration
+        if tenant_type == 'company':
+            company_name = data.get('company_name', '').strip()
+            
+            if not company_name:
+                return jsonify({'error': 'company_name is required when tenant_type is "company"'}), 400
+            
+            print(f"🏢 Company registration for: {company_name}")
+            
+            # Check if company already exists (case-insensitive)
+            existing_tenant = Tenant.query.filter(
+                Tenant.tenant_type == 'company',
+                db.func.lower(Tenant.company_name) == company_name.lower()
+            ).first()
+            
+            if existing_tenant:
+                # Company exists - check if email is already used in this tenant
+                existing_user = User.query.filter_by(
+                    email=email,
+                    tenant_id=existing_tenant.id
+                ).first()
+                
+                if existing_user:
+                    return jsonify({'error': 'Email already registered in this company'}), 409
+                
+                # Add user to existing company
+                tenant = existing_tenant
+                role = 'member'  # New users joining existing company are members
+                
+                print(f"✅ User joining existing company: {company_name}")
+            else:
+                # Create new company tenant
+                company_slug = Tenant.create_slug(company_name)
+                
+                # Ensure slug is unique
+                base_slug = company_slug
+                counter = 1
+                while Tenant.query.filter_by(subdomain=company_slug).first():
+                    company_slug = f"{base_slug}-{counter}"
+                    counter += 1
+                
+                tenant = Tenant(
+                    tenant_type='company',
+                    company_name=company_name,
+                    subdomain=company_slug,
+                    max_users=999999,  # Unlimited for companies
+                    is_active=True
+                )
+                db.session.add(tenant)
+                db.session.flush()  # Get tenant ID
+                
+                role = 'owner'  # First user in company is owner
+                
+                print(f"✅ Created new company: {company_name} (slug: {company_slug})")
         
-        # Check if user already exists (email unique per tenant)
-        if User.query.filter_by(email=email, tenant_id=tenant_id).first():
-            return jsonify({'error': 'Email already registered for this tenant'}), 409
+        # Handle Individual Registration
+        else:  # tenant_type == 'individual'
+            print(f"👤 Individual registration for: {email}")
+            
+            # Check if this email already has an individual account
+            existing_individual = User.query.join(
+                Tenant, User.tenant_id == Tenant.id  # Explicit join condition
+            ).filter(
+                User.email == email,
+                Tenant.tenant_type == 'individual'
+            ).first()
+            
+            if existing_individual:
+                return jsonify({'error': 'Email already registered as individual account'}), 409
+            
+            # Create individual tenant (one per user)
+            tenant = Tenant(
+                tenant_type='individual',
+                company_name=None,
+                subdomain=None,
+                max_users=1,  # Only one user allowed
+                is_active=True
+            )
+            db.session.add(tenant)
+            db.session.flush()  # Get tenant ID
+            
+            role = 'owner'  # Individual users are owners of their tenant
+            
+            print(f"✅ Created individual tenant: {tenant.id}")
         
-        # Create new user
+        # Create user
         user = User(
-            tenant_id=tenant_id,  # NEW: Set tenant_id
+            tenant_id=tenant.id,
             email=email,
             first_name=first_name,
             last_name=last_name,
             phone=data.get('phone', '').strip(),
-            department=data.get('department', '').strip(),
-            role=data.get('role', 'user'),  # Default role
-            is_active=True
+            role=role,
+            is_active=True,
+            is_verified=False
         )
         user.set_password(password)
         user.generate_verification_token()
         
+        # Link individual tenant to owner user
+        if tenant_type == 'individual':
+            tenant.owner_user_id = user.id
+        
         db.session.add(user)
         db.session.commit()
+        
+        # Generate JWT token
+        token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
         
         # Log successful registration
         log_login_attempt(email, get_client_ip(), True)
         
+        print(f"✅ User registered successfully: {email} (ID: {user.id}, Tenant: {tenant.id})")
+        
         return jsonify({
             'message': 'User registered successfully',
             'user': user.to_dict(),
-            'tenant': tenant.to_dict()  # NEW: Return tenant info
+            'tenant': tenant.to_dict(),
+            'token': token
         }), 201
         
     except Exception as e:
         db.session.rollback()
+        print(f"❌ Registration error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/login', methods=['POST'])
@@ -468,4 +573,39 @@ def get_tenant_info():
         }), 200
         
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@auth_bp.route('/auth/check-company', methods=['POST'])
+def check_company():
+    """
+    Check if a company name already exists
+    Used in frontend to show if user is joining existing company or creating new
+    """
+    try:
+        data = request.get_json()
+        company_name = data.get('company_name', '').strip()
+        
+        if not company_name:
+            return jsonify({'exists': False}), 200
+        
+        existing_tenant = Tenant.query.filter(
+            Tenant.tenant_type == 'company',
+            db.func.lower(Tenant.company_name) == company_name.lower()
+        ).first()
+        
+        if existing_tenant:
+            return jsonify({
+                'exists': True,
+                'company_name': existing_tenant.company_name,
+                'company_slug': existing_tenant.subdomain,
+                'message': f'You will join the existing company: {existing_tenant.company_name}'
+            }), 200
+        else:
+            return jsonify({
+                'exists': False,
+                'message': f'A new company will be created: {company_name}'
+            }), 200
+            
+    except Exception as e:
+        print(f"❌ Check company error: {e}")
         return jsonify({'error': str(e)}), 500
