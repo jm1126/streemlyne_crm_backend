@@ -1,6 +1,6 @@
 # app.py - Updated with Flask-Migrate for database migrations
 
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 from flask_migrate import Migrate
 import os
@@ -22,27 +22,34 @@ def create_app():
     # Fetches from .env or uses fallback
     app.config['SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'default-fallback-secret-key')
     
-    # ✅ FIXED: Configure CORS to allow all Vercel deployments (including preview URLs)
-    def cors_origin_validator(origin):
-        """Allow localhost and all Vercel deployments"""
-        if not origin:
-            return False
-            
-        allowed_patterns = [
-            r'^http://localhost:\d+$',
-            r'^http://127\.0\.0\.1:\d+$',
-            r'^https://.*\.vercel\.app$',  # Matches all Vercel deployments
-        ]
-        return any(re.match(pattern, origin) for pattern in allowed_patterns)
-    
-    CORS(app, 
-         origins=cors_origin_validator,
+    # ✅ FIXED: Configure CORS to allow localhost and all Vercel deployments
+    # Use a list of specific origins + a custom @after_request handler for dynamic origins
+    CORS(app,
+         origins=[
+             "http://localhost:3000",
+             "http://localhost:3001", 
+             "http://127.0.0.1:3000",
+             "http://127.0.0.1:3001",
+             "https://streemlyne-crm-frontend.vercel.app",
+         ],
          methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
          allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
          supports_credentials=True,
          expose_headers=["Content-Type", "Authorization"],
          max_age=3600
     )
+    
+    # Additional CORS handler for Vercel preview deployments
+    @app.after_request
+    def add_cors_headers(response):
+        origin = request.headers.get('Origin')
+        if origin and re.match(r'^https://.*\.vercel\.app$', origin):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+            response.headers['Access-Control-Expose-Headers'] = 'Content-Type, Authorization'
+        return response
     
     # Database configuration: SWITCHING TO SUPABASE POSTGRESQL
     # -----------------------------------------------------------
