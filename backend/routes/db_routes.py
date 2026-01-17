@@ -7,7 +7,7 @@ from models import (
     Invoice, InvoiceLineItem, Payment, Team, TeamMember, 
     Salesperson, FormSubmission, CustomerFormData, AuditLog, Assignment
 )
-from tenant_middleware import require_tenant  # ADD THIS IMPORT
+from tenant_middleware import token_required
 import json
 from datetime import datetime
 
@@ -19,7 +19,7 @@ db_bp = Blueprint('database', __name__)
 # ----------------------------------
 
 @db_bp.route('/opportunities', methods=['GET', 'POST'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_opportunities():
     if request.method == 'POST':
         data = request.json
@@ -77,7 +77,7 @@ def handle_opportunities():
     ])
 
 @db_bp.route('/opportunities/<string:opportunity_id>', methods=['GET', 'PUT', 'DELETE'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_single_opportunity(opportunity_id):
     # ADD TENANT FILTER - CRITICAL FOR SECURITY!
     opportunity = Opportunity.query.filter_by(
@@ -136,7 +136,7 @@ def handle_single_opportunity(opportunity_id):
 # ----------------------------------
 
 @db_bp.route('/proposals', methods=['GET', 'POST'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_proposals():
     if request.method == 'POST':
         data = request.json
@@ -205,7 +205,7 @@ def handle_proposals():
 # ----------------------------------
 
 @db_bp.route('/invoices', methods=['GET', 'POST'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_invoices():
     if request.method == 'POST':
         data = request.json
@@ -269,7 +269,7 @@ def handle_invoices():
 # ----------------------------------
 
 @db_bp.route('/teams', methods=['GET', 'POST'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_teams():
     if request.method == 'POST':
         data = request.json
@@ -299,7 +299,7 @@ def handle_teams():
     ])
 
 @db_bp.route('/salespeople', methods=['GET', 'POST'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_salespeople():
     if request.method == 'POST':
         data = request.json
@@ -335,7 +335,7 @@ def handle_salespeople():
 # ----------------------------------
 
 @db_bp.route('/jobs', methods=['GET', 'POST'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_jobs():
     """Jobs are mapped to Opportunities in the backend"""
     if request.method == 'POST':
@@ -428,7 +428,7 @@ def handle_jobs():
 
 
 @db_bp.route('/jobs/<string:job_id>', methods=['GET', 'PUT', 'DELETE'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def handle_single_job(job_id):
     """Single job endpoint (mapped to opportunity)"""
     # ADD TENANT FILTER
@@ -528,7 +528,7 @@ def handle_single_job(job_id):
 # ----------------------------------
 
 @db_bp.route('/pipeline', methods=['GET'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def get_pipeline_data():
     """
     Returns combined customer/opportunity data for pipeline view
@@ -617,7 +617,7 @@ def get_pipeline_data():
 # Stage Update Routes (CRITICAL FOR DRAG & DROP)
 # ----------------------------------
 @db_bp.route('/opportunities/<string:opportunity_id>/stage', methods=['PATCH', 'OPTIONS'])
-@require_tenant  # ADD THIS
+@token_required  # ADD THIS
 def update_opportunity_stage(opportunity_id):
     """Update opportunity stage via drag and drop"""
     if request.method == 'OPTIONS':

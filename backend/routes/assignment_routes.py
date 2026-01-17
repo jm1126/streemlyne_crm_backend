@@ -2,7 +2,8 @@ from flask import Blueprint, request, jsonify, g
 from datetime import datetime, date
 from database import db
 from models import Assignment, TeamMember, Job, Customer
-from tenant_middleware import require_tenant  # ✅ ADDED
+from tenant_middleware import require_tenant as token_required
+
 
 assignment_bp = Blueprint("assignment", __name__, url_prefix="/assignments")
 
@@ -29,7 +30,7 @@ def filter_assignment_data(data):
 # GET assignments for a month
 # -----------------------------
 @assignment_bp.route("", methods=["GET"])
-@require_tenant  # ✅ ADDED
+@token_required  # ✅ ADDED
 def get_assignments():
     """Get all assignments, optionally filtered by month"""
     month = request.args.get("month")  # YYYY-MM
@@ -61,7 +62,7 @@ def get_assignments():
 # CREATE assignment
 # -----------------------------
 @assignment_bp.route("", methods=["POST"])
-@require_tenant  # ✅ ADDED
+@token_required  # ✅ ADDED
 def create_assignment():
     """Create a new assignment"""
     data = request.json
@@ -220,7 +221,7 @@ def create_assignment():
 # UPDATE assignment
 # -----------------------------
 @assignment_bp.route("/<assignment_id>", methods=["PUT"])
-@require_tenant  # ✅ ADDED
+@token_required  # ✅ ADDED
 def update_assignment(assignment_id):
     """Update an existing assignment"""
     # ✅ FILTER BY TENANT
@@ -355,7 +356,7 @@ def update_assignment(assignment_id):
 # DELETE assignment
 # -----------------------------
 @assignment_bp.route("/<assignment_id>", methods=["DELETE"])
-@require_tenant  # ✅ ADDED
+@token_required  # ✅ ADDED
 def delete_assignment(assignment_id):
     """Delete an assignment"""
     # ✅ FILTER BY TENANT

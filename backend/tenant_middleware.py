@@ -48,6 +48,9 @@ def check_feature(feature_name):
 def get_tenant_query(model_class):
     """Returns a query automatically filtered by tenant"""
     if not hasattr(g, 'tenant_id'):
-        raise Exception("Tenant context not set! Use @require_tenant decorator")
+        raise Exception("Tenant context not set! Use @token_required decorator")
     
     return model_class.query.filter_by(tenant_id=g.tenant_id)
+
+# Alias for backward compatibility
+token_required = require_tenant

@@ -1,5 +1,7 @@
 # core_routes.py - Fixed to use Blueprint
 from flask import Blueprint, render_template, jsonify
+from tenant_middleware import require_tenant as token_required
+
 
 # Create blueprint
 core_bp = Blueprint('core', __name__)

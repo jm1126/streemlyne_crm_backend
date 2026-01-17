@@ -1,9 +1,10 @@
 from flask import Blueprint, request, jsonify, g
 from database import db
 from models import ChatHistory, ChatConversation, ChatMessage
-from tenant_middleware import require_tenant
 from datetime import datetime
 import uuid
+from tenant_middleware import require_tenant as token_required
+
 
 chat_bp = Blueprint('chat', __name__)
 
@@ -12,7 +13,7 @@ chat_bp = Blueprint('chat', __name__)
 # ----------------------------------
 
 @chat_bp.route('/chat/sessions', methods=['GET'])
-@require_tenant
+@token_required
 def get_chat_sessions():
     """Get all chat sessions for current user"""
     # CRITICAL: Filter by both tenant_id AND user_id for individual isolation
@@ -25,7 +26,7 @@ def get_chat_sessions():
 
 
 @chat_bp.route('/chat/sessions/<string:session_id>', methods=['GET'])
-@require_tenant
+@token_required
 def get_chat_session(session_id):
     """Get specific chat session"""
     # CRITICAL: Verify session belongs to current user AND tenant
@@ -42,7 +43,7 @@ def get_chat_session(session_id):
 
 
 @chat_bp.route('/chat/sessions', methods=['POST'])
-@require_tenant
+@token_required
 def create_chat_session():
     """Create new chat session"""
     data = request.get_json()
@@ -69,7 +70,7 @@ def create_chat_session():
 
 
 @chat_bp.route('/chat/sessions/<string:session_id>', methods=['PUT'])
-@require_tenant
+@token_required
 def update_chat_session(session_id):
     """Update chat session (add messages)"""
     # CRITICAL: Verify session belongs to current user
@@ -104,7 +105,7 @@ def update_chat_session(session_id):
 
 
 @chat_bp.route('/chat/sessions/<string:session_id>', methods=['DELETE'])
-@require_tenant
+@token_required
 def delete_chat_session(session_id):
     """Delete chat session"""
     # CRITICAL: Verify session belongs to current user
@@ -128,7 +129,7 @@ def delete_chat_session(session_id):
 # ----------------------------------
 
 @chat_bp.route('/chat/conversations', methods=['GET'])
-@require_tenant
+@token_required
 def get_conversations():
     """Get all conversations for current user"""
     conversations = ChatConversation.query.filter_by(
@@ -140,7 +141,7 @@ def get_conversations():
 
 
 @chat_bp.route('/chat/conversations', methods=['POST'])
-@require_tenant
+@token_required
 def create_conversation():
     """Create new conversation"""
     data = request.get_json()
@@ -158,7 +159,7 @@ def create_conversation():
 
 
 @chat_bp.route('/chat/conversations/<string:conversation_id>', methods=['GET'])
-@require_tenant
+@token_required
 def get_conversation(conversation_id):
     """Get conversation with all messages"""
     # CRITICAL: Verify conversation belongs to current user
@@ -185,7 +186,7 @@ def get_conversation(conversation_id):
 
 
 @chat_bp.route('/chat/conversations/<string:conversation_id>/messages', methods=['POST'])
-@require_tenant
+@token_required
 def add_message(conversation_id):
     """Add message to conversation"""
     # CRITICAL: Verify conversation belongs to current user
@@ -221,7 +222,7 @@ def add_message(conversation_id):
 
 
 @chat_bp.route('/chat/conversations/<string:conversation_id>', methods=['DELETE'])
-@require_tenant
+@token_required
 def delete_conversation(conversation_id):
     """Delete conversation and all its messages"""
     # CRITICAL: Verify conversation belongs to current user
@@ -245,7 +246,7 @@ def delete_conversation(conversation_id):
 # ----------------------------------
 
 @chat_bp.route('/chat/clear-all', methods=['DELETE'])
-@require_tenant
+@token_required
 def clear_all_chats():
     """Clear all chat history for current user"""
     # Delete all sessions for this user

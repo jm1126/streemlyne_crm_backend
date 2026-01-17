@@ -1,6 +1,7 @@
 # routes/form_routes.py - Fixed to create only one submission record
 from flask import Blueprint, request, jsonify, current_app
-from models import db, Customer, CustomerFormData
+from database import db
+from models import Customer, CustomerFormData
 import secrets
 import string
 import json

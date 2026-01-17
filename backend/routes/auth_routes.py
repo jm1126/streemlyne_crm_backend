@@ -7,7 +7,7 @@ from functools import wraps
 import secrets
 import re
 
-auth_bp = Blueprint('auth', __name__)
+auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
 
 def get_client_ip():
     """Get client IP address"""
@@ -98,7 +98,7 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
-@auth_bp.route('/auth/register', methods=['POST'])
+@auth_bp.route('/register', methods=['POST'])
 def register():
     """
     Register a new user with either Individual or Company tenant
@@ -273,7 +273,7 @@ def register():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-@auth_bp.route('/auth/login', methods=['POST'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
     """Login user"""
     try:
@@ -290,7 +290,7 @@ def login():
         if not check_rate_limit(email):
             return jsonify({'error': 'Too many failed login attempts. Try again later.'}), 429
         
-        # Find user (email is now unique per tenant, but we don't know tenant yet)
+        # Find user
         user = User.query.filter_by(email=email).first()
         
         if not user or not user.check_password(password):
@@ -301,7 +301,7 @@ def login():
             log_login_attempt(email, ip_address, False)
             return jsonify({'error': 'Account is disabled'}), 401
         
-        # NEW: Get tenant info and verify it's active
+        # Get tenant info and verify it's active
         tenant = Tenant.query.get(user.tenant_id)
         if not tenant:
             log_login_attempt(email, ip_address, False)
@@ -314,13 +314,13 @@ def login():
         # Update last login
         user.last_login = datetime.utcnow()
         
-        # Generate JWT token (includes user_id which links to tenant)
+        # Generate JWT token
         token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
         
         # Create session record
         session = Session(
             user_id=user.id,
-            tenant_id=user.tenant_id,  # NEW: Add tenant_id to session
+            tenant_id=user.tenant_id,
             session_token=token,
             ip_address=ip_address,
             user_agent=request.headers.get('User-Agent', ''),
@@ -333,18 +333,39 @@ def login():
         
         db.session.commit()
         
+        # ✅ CRITICAL: Map database tenant_id to frontend tenant identifier
+        tenant_mapping = {
+            'fai-003': 'fai',
+            'aztec-001': 'aztec',
+            'inner-space-002': 'innerspace',
+            # Add streemlyne when you have it
+        }
+        
+        # Get frontend tenant identifier
+        frontend_tenant_id = tenant_mapping.get(user.tenant_id, 'streemlyne')
+        
+        print(f"🏢 Login successful - User: {email}, DB Tenant: {user.tenant_id} -> Frontend: {frontend_tenant_id}")
+        
+        # ✅ Return user dict with tenant_id embedded
+        user_dict = user.to_dict()
+        user_dict['tenant_id'] = frontend_tenant_id  # Override with frontend identifier
+        
         return jsonify({
             'message': 'Login successful',
             'token': token,
-            'user': user.to_dict(),
-            'tenant': tenant.to_dict()  # NEW: Return tenant info to frontend
+            'user': user_dict,  # User object now includes frontend tenant_id
+            'tenant_id': frontend_tenant_id,  # Also at root level for easy access
+            'tenant': tenant.to_dict()  # Full tenant info
         }), 200
         
     except Exception as e:
         db.session.rollback()
+        print(f"❌ Login error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-@auth_bp.route('/auth/logout', methods=['POST'])
+@auth_bp.route('/logout', methods=['POST'])
 @token_required
 def logout():
     """Logout user"""
@@ -370,12 +391,25 @@ def get_current_user():
     try:
         user = request.current_user
         
-        # NEW: Also return tenant info
+        # Get tenant info
         tenant = Tenant.query.get(user.tenant_id)
         
+        # ✅ Map database tenant_id to frontend identifier
+        tenant_mapping = {
+            'fai-003': 'fai',
+            'aztec-001': 'aztec',
+            'inner-space-002': 'innerspace',
+        }
+        
+        frontend_tenant_id = tenant_mapping.get(user.tenant_id, 'streemlyne')
+        
+        # ✅ Add tenant_id to user object
+        user_dict = user.to_dict()
+        user_dict['tenant_id'] = frontend_tenant_id
+        
         return jsonify({
-            'user': user.to_dict(),
-            'tenant': tenant.to_dict() if tenant else None  # NEW
+            'user': user_dict,
+            'tenant': tenant.to_dict() if tenant else None
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

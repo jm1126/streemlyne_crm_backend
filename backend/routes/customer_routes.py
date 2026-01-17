@@ -2,9 +2,9 @@
 from flask import Blueprint, request, jsonify, g
 from database import db
 from models import Customer, CustomerFormData, Opportunity
-from tenant_middleware import require_tenant, check_feature
 import json
 from datetime import datetime
+from tenant_middleware import require_tenant as token_required
 
 customer_bp = Blueprint('customer', __name__)
 
@@ -12,8 +12,35 @@ customer_bp = Blueprint('customer', __name__)
 # Customer Routes
 # ----------------------------------
 
+@customer_bp.route('/customers', methods=['POST'])
+@token_required
+def create_customer(current_user):
+    """Create new customer with custom data support"""
+    
+    data = request.get_json()
+    
+    # Basic customer info
+    customer = Customer(
+        tenant_id=current_user.tenant_id,
+        name=data['name'],
+        email=data.get('email'),
+        phone=data.get('phone'),
+        address=data.get('address'),
+        stage=data.get('stage', 'Prospect'),
+    )
+    
+    # 🎯 NEW: Store industry-specific data in custom_data
+    if 'custom_data' in data:
+        customer.custom_data = data['custom_data']
+        # Example: {'mhe_type': 'Forklift', 'batch_size': 10}
+    
+    db.session.add(customer)
+    db.session.commit()
+    
+    return jsonify(customer.to_dict()), 201
+
 @customer_bp.route('/customers', methods=['GET', 'POST'])
-@require_tenant
+@token_required
 def handle_customers():
     if request.method == 'POST':
         data = request.json
@@ -112,7 +139,7 @@ def handle_customers():
     ])
 
 @customer_bp.route('/customers/<string:customer_id>', methods=['GET', 'PUT', 'DELETE'])
-@require_tenant
+@token_required
 def handle_single_customer(customer_id):
     # CRITICAL: Filter by both id AND tenant_id for security
     customer = Customer.query.filter_by(
@@ -217,7 +244,7 @@ def handle_single_customer(customer_id):
 
 
 @customer_bp.route('/customers/<string:customer_id>/stage', methods=['PATCH'])
-@require_tenant
+@token_required
 def update_customer_stage(customer_id):
     """Update customer stage via drag and drop"""
     # CRITICAL: Filter by tenant

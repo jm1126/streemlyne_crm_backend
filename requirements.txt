@@ -14,3 +14,13 @@ openpyxl
 PyJWT
 gunicorn==21.2.0
 Werkzeug>=3.0.0
+surya-ocr>=0.4.0
+cadquery>=2.4.0
+ezdxf==1.1.0
+Pillow==10.2.0
+pdf2image==1.17.0
+numpy>=1.26.0
+opencv-python>=4.8.0
+shapely>=2.0.0
+google-cloud-vision==3.5.0
+openai>=1.12.0

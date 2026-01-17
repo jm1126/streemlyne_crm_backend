@@ -5,6 +5,8 @@ from models import Job, Customer, Opportunity, generate_job_reference
 from datetime import datetime, date
 from sqlalchemy import func
 import json
+from tenant_middleware import require_tenant as token_required
+
 
 job_bp = Blueprint("jobs", __name__)
 
